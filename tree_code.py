@@ -162,3 +162,12 @@ class DecisionTree:
         for x in X:
             predicted.append(self._predict_node(x, self._tree))
         return np.array(predicted)
+
+    def get_params(self, deep=True):
+        return {"feature_types": self._feature_types, "max_depth": self._max_depth,
+                "min_samples_split": self._min_samples_split, "min_samples_leaf": self._min_samples_leaf}
+
+    def set_params(self, **params):
+        for param, value in params.items():
+            setattr(self, param, value)
+        return self
