@@ -48,14 +48,12 @@ def find_best_split(feature_vector, target_vector):
 
     return unique_thresholds, ginis, threshold_best, gini_best
 
+
+import numpy as np
+from collections import Counter
+
 class DecisionTree:
-    def __init__(
-        self,
-        feature_types,
-        max_depth=None,
-        min_samples_split=None,
-        min_samples_leaf=None,
-    ):
+    def __init__(self, feature_types, max_depth=None, min_samples_split=None, min_samples_leaf=None):
         if any(ft not in {"real", "categorical"} for ft in feature_types):
             raise ValueError("There is unknown feature type")
 
@@ -65,28 +63,14 @@ class DecisionTree:
         self._min_samples_split = min_samples_split
         self._min_samples_leaf = min_samples_leaf
 
-    def _fit_node(self, sub_X, sub_y, node):
-        """
-        Обучение узла дерева решений.
-
-        Если все элементы в подвыборке принадлежат одному классу, узел становится терминальным.
-
-        Parameters
-        ----------
-        sub_X : np.ndarray
-            Подвыборка признаков.
-        sub_y : np.ndarray
-            Подвыборка меток классов.
-        node : dict
-            Узел дерева, который будет заполнен информацией о разбиении.
-
-        """
-        if np.all(sub_y == sub_y[0]):
+    def _fit_node(self, sub_X, sub_y, node, depth=0):
+        if np.all(sub_y == sub_y[0]) or (self._max_depth is not None and depth >= self._max_depth) or (
+                self._min_samples_split is not None and len(sub_y) < self._min_samples_split):
             node["type"] = "terminal"
-            node["class"] = sub_y[0]
+            node["class"] = Counter(sub_y).most_common(1)[0][0]
             return
 
-        feature_best, threshold_best, gini_best, split = None, None, None, None
+        feature_best, threshold_best, gini_best, split = None, None, float('inf'), None
 
         for feature in range(sub_X.shape[1]):
             feature_type = self._feature_types[feature]
@@ -110,9 +94,9 @@ class DecisionTree:
             if len(np.unique(feature_vector)) <= 1:
                 continue
 
-            _, _, threshold, gini = find_best_split(feature_vector, sub_y)
+            thresholds, ginis, threshold, gini = find_best_split(feature_vector, sub_y)
 
-            if gini_best is None or gini > gini_best:
+            if gini < gini_best:
                 feature_best = feature
                 gini_best = gini
                 split = feature_vector < threshold
@@ -120,9 +104,7 @@ class DecisionTree:
                 if feature_type == "real":
                     threshold_best = threshold
                 elif feature_type == "categorical":
-                    threshold_best = [
-                        k for k, v in categories_map.items() if v < threshold
-                    ]
+                    threshold_best = sorted_categories[:int(threshold + 1)]
 
         if feature_best is None:
             node["type"] = "terminal"
@@ -140,30 +122,37 @@ class DecisionTree:
             raise ValueError("Некорректный тип признака")
 
         node["left_child"], node["right_child"] = {}, {}
-        self._fit_node(sub_X[split], sub_y[split], node["left_child"])
-        self._fit_node(sub_X[~split], sub_y[~split], node["right_child"])
+        left_split = sub_X[:, feature_best] < threshold_best if self._feature_types[feature_best] == "real" else np.isin(sub_X[:, feature_best], threshold_best)
+        right_split = ~left_split
+
+        if np.sum(left_split) > 0:
+            self._fit_node(sub_X[left_split], sub_y[left_split], node["left_child"], depth + 1)
+        else:
+            node["left_child"]["type"] = "terminal"
+            node["left_child"]["class"] = Counter(sub_y).most_common(1)[0][0]
+
+        if np.sum(right_split) > 0:
+            self._fit_node(sub_X[right_split], sub_y[right_split], node["right_child"], depth + 1)
+        else:
+            node["right_child"]["type"] = "terminal"
+            node["right_child"]["class"] = Counter(sub_y).most_common(1)[0][0]
 
     def _predict_node(self, x, node):
-        """
-        Рекурсивное предсказание класса для одного объекта по узлу дерева решений.
+        if node["type"] == "terminal":
+            return node["class"]
 
-        Если узел терминальный, возвращается предсказанный класс.
-        Если узел не терминальный, выборка передается в соответствующее поддерево для дальнейшего предсказания.
-
-        Parameters
-        ----------
-        x : np.ndarray
-            Вектор признаков одного объекта.
-        node : dict
-            Узел дерева решений.
-
-        Returns
-        -------
-        int
-            Предсказанный класс объекта.
-        """
-        # ╰( ͡☉ ͜ʖ ͡☉ )つ──☆*:・ﾟ   ฅ^•ﻌ•^ฅ   ʕ•ᴥ•ʔ
-        pass
+        if self._feature_types[node["feature_split"]] == "real":
+            if x[node["feature_split"]] < node["threshold"]:
+                return self._predict_node(x, node["left_child"])
+            else:
+                return self._predict_node(x, node["right_child"])
+        elif self._feature_types[node["feature_split"]] == "categorical":
+            if x[node["feature_split"]] in node["categories_split"]:
+                return self._predict_node(x, node["left_child"])
+            else:
+                return self._predict_node(x, node["right_child"])
+        else:
+            raise ValueError("Некорректный тип признака")
 
     def fit(self, X, y):
         self._fit_node(X, y, self._tree)
